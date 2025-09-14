@@ -1,5 +1,6 @@
 #define GLFW_INCLUDE_VULKAN
 #define GL_FORCE_RADIANS
+
 #include "glfw/glfw3.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -163,7 +164,7 @@ void createDescriptorPool();
 void createDescriptorSet();
 void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout);
 void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory, BufferMemoryBlock* memBlock);
-void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
+void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t actualCurrentFrame, uint32_t imageIndex);
 SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device);
 QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device);
 VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats);
@@ -174,8 +175,24 @@ static void framebufferResizeCallback(GLFWwindow* window, int width, int height)
 uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
 void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
 void copyBufferToImage(VkBuffer srcBuffer, VkImage dstImage, uint32_t width, uint32_t height);
+std::vector<const char*> getRequiredExtensions();
+static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
+	VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+	VkDebugUtilsMessageTypeFlagsEXT messageType,
+	const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
+	void* pUserData
+);
+void setupDebugMessenger();
+VkResult CreateDebugUtilsMessengerEXT(VkInstance instance, 
+	const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo,
+	const VkAllocationCallbacks* pAllocator,
+	VkDebugUtilsMessengerEXT* pDebugMessenger);
+void DestroyDebugUtilsMessengerEXT(VkInstance instance,
+	VkDebugUtilsMessengerEXT debugMessenger, const
+	VkAllocationCallbacks* pAllocator);
+void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo);
 
-void allocateMemory(BufferMemoryBlock& memBlock, uint32_t allocSize, VkMemoryPropertyFlags memProperties);
+void allocateMemory(BufferMemoryBlock& memBlock, uint32_t allocSize, VkBufferUsageFlags memUsage, VkMemoryPropertyFlags memProperties);
 void allocateMemory(ImageMemoryBlock& memBlock, uint32_t allocSize);
 
 
@@ -184,6 +201,7 @@ const uint16_t HEIGHT = 600;
 
 GLFWwindow* window = nullptr;
 VkInstance instance;
+VkDebugUtilsMessengerEXT debugMessenger;
 VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
 VkDevice logicalDevice;
 VkQueue graphicsQueue;
@@ -213,6 +231,7 @@ std::vector<VkCommandBuffer> commandBuffers;
 std::vector<VkSemaphore> imageAvailableSemaphore;
 std::vector<VkSemaphore> renderFinishedSemaphore;
 std::vector<VkFence> inFlightFence;
+std::vector<VkFence> imagesInFlight;
 std::vector<VkBuffer> uniformBuffers;
 std::vector<void*> uniformBuffersMapped;
 
@@ -270,6 +289,7 @@ void run()
 void initVulkan()
 {
 	createInstance();
+	setupDebugMessenger();
 	createSurface();
 
 	uint32_t extensionCount = 0;
@@ -322,8 +342,8 @@ void initVulkan()
 	createFrameBuffers();
 	createCommandPool();
 	createCommandBuffers();
-	allocateMemory(vertexMemoryBlock, 4096, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-	allocateMemory(uniformBuffersMemoryBlock, 1024, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+	allocateMemory(vertexMemoryBlock, 4096, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+	allocateMemory(uniformBuffersMemoryBlock, 1024, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
 	allocateMemory(imageTextureMemoryBlock, 16777216);
 	createTextureImage(textureImage);
 	createTextureImageView();
@@ -358,6 +378,124 @@ void initWindow()
 
 
 
+std::vector<const char*> getRequiredExtensions()
+{
+	uint32_t glfwExtensionCount = 0;
+	const char** glfwExtensions;
+
+	glfwExtensions =
+		glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
+
+	std::vector<const char*> extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
+
+	if (enableValidationLayers)
+	{
+		extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+	}
+
+	return extensions;
+}
+
+
+
+
+
+static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
+	VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+	VkDebugUtilsMessageTypeFlagsEXT messageType,
+	const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
+	void* pUserData
+)
+{
+	if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
+	{
+		std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
+	}
+	
+
+	return VK_FALSE;
+}
+
+
+
+
+
+void setupDebugMessenger()
+{
+	if (!enableValidationLayers) return;
+
+	VkDebugUtilsMessengerCreateInfoEXT createInfo{};
+	populateDebugMessengerCreateInfo(createInfo);
+
+	if (CreateDebugUtilsMessengerEXT(instance, &createInfo, nullptr, &debugMessenger) != VK_SUCCESS) {
+		throw std::runtime_error("failed to set up debug messenger!");
+	}
+
+}
+
+
+
+
+
+VkResult CreateDebugUtilsMessengerEXT(VkInstance instance,
+	const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo,
+	const VkAllocationCallbacks* pAllocator,
+	VkDebugUtilsMessengerEXT* pDebugMessenger)
+{
+	auto func = (PFN_vkCreateDebugUtilsMessengerEXT)
+		vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT");
+	if (func != nullptr) {
+		return func(instance, pCreateInfo, pAllocator, pDebugMessenger);
+		
+	}
+	else {
+		return VK_ERROR_EXTENSION_NOT_PRESENT;
+	}
+
+}
+
+
+
+
+
+void DestroyDebugUtilsMessengerEXT(VkInstance instance,
+	VkDebugUtilsMessengerEXT debugMessenger, const
+	VkAllocationCallbacks* pAllocator)
+{
+	auto func = (PFN_vkDestroyDebugUtilsMessengerEXT)
+		vkGetInstanceProcAddr(instance,
+			"vkDestroyDebugUtilsMessengerEXT");
+	if (func != nullptr) {
+		func(instance, debugMessenger, pAllocator);
+	}
+
+}
+
+
+
+
+
+void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo)
+{
+	createInfo = {};
+	createInfo.sType =
+		VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+	createInfo.messageSeverity =
+		VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
+		VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+		VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+	createInfo.messageType =
+		VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+		VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+		VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+	createInfo.pfnUserCallback = debugCallback;
+
+}
+
+
+
+
+
 static void framebufferResizeCallback(GLFWwindow* window, int width, int height)
 {
 	frameBufferResized = true;
@@ -366,9 +504,21 @@ static void framebufferResizeCallback(GLFWwindow* window, int width, int height)
 
 void drawFrameThread()
 {
+	float accTime = 0;
+	const float fps = 1.f / 100.f;
 	while (!glfwWindowShouldClose(window))
 	{
-		drawFrame();
+		static std::chrono::steady_clock::time_point prevTime = std::chrono::high_resolution_clock::now();
+		if (accTime > fps)
+		{
+			drawFrame();
+			accTime -= fps;
+		}
+		
+		const std::chrono::steady_clock::time_point currentTime = std::chrono::high_resolution_clock::now();
+		const float deltaTime = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - prevTime).count();
+		prevTime = std::chrono::high_resolution_clock::now();
+		accTime += deltaTime;
 	}
 }
 void mainLoop()
@@ -398,10 +548,22 @@ void drawFrame()
 	if (recreateSwapchainRequest) return;
 	static std::chrono::steady_clock::time_point prevTime = std::chrono::high_resolution_clock::now();
 	
-	vkWaitForFences(logicalDevice, 1, &inFlightFence[currentFrame], VK_TRUE, UINT64_MAX);
+	uint32_t actualCurrentFrame = currentFrame;
+
+	vkWaitForFences(logicalDevice, 1, &inFlightFence[actualCurrentFrame], VK_TRUE, UINT64_MAX);
+	vkResetFences(logicalDevice, 1, &inFlightFence[actualCurrentFrame]);
+	//for (int i = 0; i < swapchainImages.size(); i++)
+	//{
+	//	if (imagesInFlight[i] == inFlightFence[actualCurrentFrame])
+	//	{
+	//		imagesInFlight[i] = VK_NULL_HANDLE;
+	//	}
+	//}
 
 	uint32_t imageIndex;
-	VkResult result = vkAcquireNextImageKHR(logicalDevice, swapchain, UINT64_MAX, imageAvailableSemaphore[currentFrame], VK_NULL_HANDLE, &imageIndex);
+	VkResult result = vkAcquireNextImageKHR(logicalDevice, swapchain, UINT64_MAX, imageAvailableSemaphore[actualCurrentFrame], VK_NULL_HANDLE, &imageIndex);
+	
+
 	if (result == VK_ERROR_OUT_OF_DATE_KHR)
 	{
 		recreateSwapchainRequest = true;
@@ -412,34 +574,38 @@ void drawFrame()
 		throw std::runtime_error("failed to acquire swapchain image!\n");
 	}
 
-	vkResetFences(logicalDevice, 1, &inFlightFence[currentFrame]);
+	//if (imagesInFlight[imageIndex] != VK_NULL_HANDLE)
+	//{
+	//	vkWaitForFences(logicalDevice, 1, &imagesInFlight[imageIndex], VK_TRUE, UINT64_MAX);
+	//}
+
+	//imagesInFlight[imageIndex] = inFlightFence[actualCurrentFrame];
 	
-	
-	vkResetCommandBuffer(commandBuffers[currentFrame], 0);
-	recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
-	updateUniformBuffers(currentFrame);
+	vkResetCommandBuffer(commandBuffers[actualCurrentFrame], 0);
+	recordCommandBuffer(commandBuffers[actualCurrentFrame], actualCurrentFrame, imageIndex);
+	updateUniformBuffers(actualCurrentFrame);
 	
 	VkSubmitInfo submitInfo{};
 	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
-	VkSemaphore waitSemaphores[] = { imageAvailableSemaphore[currentFrame] };
+	VkSemaphore waitSemaphores[] = { imageAvailableSemaphore[actualCurrentFrame] };
 	VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
 	
 	submitInfo.waitSemaphoreCount = 1;
 	submitInfo.pWaitSemaphores = waitSemaphores;
 	submitInfo.pWaitDstStageMask = waitStages;
 	submitInfo.commandBufferCount = 1;
-	submitInfo.pCommandBuffers = &commandBuffers[currentFrame];
+	submitInfo.pCommandBuffers = &commandBuffers[actualCurrentFrame];
 
-	VkSemaphore signalSemaphores[] = { renderFinishedSemaphore[currentFrame] };
+	VkSemaphore signalSemaphores[] = { renderFinishedSemaphore[imageIndex] };
 	submitInfo.signalSemaphoreCount = 1;
 	submitInfo.pSignalSemaphores = signalSemaphores;
 
-	if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFence[currentFrame]) != VK_SUCCESS)
+	if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFence[actualCurrentFrame]) != VK_SUCCESS)
 	{
 		throw std::runtime_error("Failed to submit draw command buffer\n");
 	}
-
+	printf("Current Frame : %d, Image Index : %d\n", actualCurrentFrame, imageIndex);
 	VkPresentInfoKHR presentInfo{};
 	presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
 	presentInfo.waitSemaphoreCount = 1;
@@ -467,8 +633,9 @@ void drawFrame()
 
 	const std::chrono::steady_clock::time_point currentTime = std::chrono::high_resolution_clock::now();
 	const float deltaTime = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - prevTime).count();
-	if (deltaTime > 0.05f)
-		printf("Draw frame time taken : %f\n", deltaTime);
+
+	//if (deltaTime > 0.05f)
+	//	printf("Draw frame time taken : %f\n", deltaTime);
 	prevTime = std::chrono::high_resolution_clock::now();
 }
 
@@ -481,11 +648,12 @@ void updateUniformBuffers(uint32_t currentFrame)
 	static std::chrono::steady_clock::time_point prevTime = std::chrono::high_resolution_clock::now();
 	const std::chrono::steady_clock::time_point currentTime = std::chrono::high_resolution_clock::now();
 	const float deltaTime = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - prevTime).count();
+	//const float deltaTime = 0;
 	static float currentRotation = 0.f;
 	currentRotation += deltaTime * glm::radians(90.f);
 
-	if (deltaTime > 0.05f)
-		printf("Time : %f\n", deltaTime);
+	//if (deltaTime > 0.05f)
+	//	printf("Time : %f\n", deltaTime);
 
 	UniformBufferObject ubo{};
 	
@@ -495,7 +663,9 @@ void updateUniformBuffers(uint32_t currentFrame)
 
 	ubo.proj[1][1] *= -1;
 
-	memcpy(uniformBuffersMapped[currentFrame], &ubo, sizeof(ubo));
+	void* mappedLocation = static_cast<char*>(uniformBuffersMapped[0]) + 192 * currentFrame;
+	memcpy(mappedLocation, &ubo, sizeof(ubo));
+	//memcpy(uniformBuffersMemoryBlock.bindings[currentFrame].buffer, &ubo, sizeof(ubo));
 	prevTime = std::chrono::high_resolution_clock::now();
 }
 
@@ -529,6 +699,9 @@ void cleanup()
 	vkDestroyDevice(logicalDevice, nullptr);
 	vkDestroySurfaceKHR(instance, surface, nullptr);
 	vkDestroyInstance(instance, nullptr);
+	if (enableValidationLayers) {
+		DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
+	}
 	glfwDestroyWindow(window);
 	glfwTerminate();
 }
@@ -544,7 +717,11 @@ bool checkValidationLayerSupport()
 
 	std::vector<VkLayerProperties> availableLayers(layerCount);
 	vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data());
-
+	printf("available layers : %d\n", layerCount);
+	for (int i = 0; i < layerCount; i++)
+	{
+		printf("Available layer names : %s,\n", availableLayers[i].layerName);
+	}
 	for (const char* layerName : validationLayers)
 	{
 		bool layerFound = false;
@@ -703,21 +880,32 @@ void createInstance()
 	createInfo.ppEnabledExtensionNames = glfwExtensions;
 	createInfo.enabledLayerCount = 0;
 
+	auto extensions = getRequiredExtensions();
+	createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
+	createInfo.ppEnabledExtensionNames = extensions.data();
 
+	VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo{};
+	if (enableValidationLayers)
+	{
+		createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
+		createInfo.ppEnabledLayerNames = validationLayers.data();
+
+		populateDebugMessengerCreateInfo(debugCreateInfo);
+		createInfo.pNext = (VkDebugUtilsMessengerCreateInfoEXT*) &debugCreateInfo;
+
+	}
+	else {
+		createInfo.enabledLayerCount = 0;
+		createInfo.pNext = nullptr;
+	}
 
 	VkResult result = vkCreateInstance(&createInfo, nullptr, &instance);
 	if (result != VK_SUCCESS)
 	{
 		throw std::runtime_error("failed to create instance!");
 	}
-	if (enableValidationLayers)
-	{
-		createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
-		createInfo.ppEnabledLayerNames = validationLayers.data();
-	}
-	else {
-		createInfo.enabledLayerCount = 0;
-	}
+
+	
 }
 
 
@@ -749,6 +937,8 @@ void createLogicalDevice()
 
 
 	VkPhysicalDeviceFeatures deviceFeatures{};
+	deviceFeatures.samplerAnisotropy = true;
+
 	VkDeviceCreateInfo createInfo{};
 	createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
 
@@ -757,6 +947,7 @@ void createLogicalDevice()
 	createInfo.pEnabledFeatures = &deviceFeatures;
 	createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
 	createInfo.ppEnabledExtensionNames = deviceExtensions.data();
+	
 
 	
 
@@ -799,9 +990,10 @@ void createSwapChain()
 	if (swapChainSupport.capabilities.maxImageCount > 0 && imageCount > swapChainSupport.capabilities.minImageCount)
 	{
 		imageCount = swapChainSupport.capabilities.maxImageCount;
+		printf("Swapchain image count : %d\n", imageCount);
 	}
 
-
+	imagesInFlight = std::vector<VkFence>(imageCount, VK_NULL_HANDLE);
 	
 	VkSwapchainCreateInfoKHR createInfo{};
 	createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
@@ -1062,6 +1254,7 @@ void createDescriptorSetLayout()
 	uboLayoutBinding.binding = 0;
 	uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 	uboLayoutBinding.descriptorCount = 1;
+	uboLayoutBinding.pImmutableSamplers = nullptr;
 	uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
 	VkDescriptorSetLayoutBinding samplerLayoutBinding{};
@@ -1389,9 +1582,10 @@ void createUniformBuffers()
 
 	uniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
 	uniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
-
+	vkMapMemory(logicalDevice, uniformBuffersMemoryBlock.memory, 0, ubuffSize, 0, &uniformBuffersMapped[0]);
 	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
 	{
+
 		BufferBinding emptyBinding = uniformBuffersMemoryBlock.getNextEmptyBinding();
 
 		createBuffer(
@@ -1404,8 +1598,8 @@ void createUniformBuffers()
 		);
 
 		uniformBuffers[i] = emptyBinding.buffer;
-
-		vkMapMemory(logicalDevice, uniformBuffersMemoryBlock.memory, emptyBinding.offset, ubuffSize, 0, &uniformBuffersMapped[i]);
+		printf("Uniform buffer offset : %d\n", emptyBinding.offset);
+		
 	}
 }
 
@@ -1500,13 +1694,13 @@ void createDescriptorSet()
 
 
 
-void allocateMemory(BufferMemoryBlock& memBlock, uint32_t allocSize, VkMemoryPropertyFlags memProperties)
+void allocateMemory(BufferMemoryBlock& memBlock, uint32_t allocSize, VkBufferUsageFlags memUsage, VkMemoryPropertyFlags memProperties)
 {
 	VkBuffer tempBuffer{};
 	VkBufferCreateInfo bufferInfo{};
 	bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
 	bufferInfo.size = 1;
-	bufferInfo.usage = memProperties;
+	bufferInfo.usage = memUsage;
 	bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 	bufferInfo.flags = 0;
 
@@ -1515,7 +1709,9 @@ void allocateMemory(BufferMemoryBlock& memBlock, uint32_t allocSize, VkMemoryPro
 	VkMemoryRequirements memReq;
 	vkGetBufferMemoryRequirements(logicalDevice, tempBuffer, &memReq);
 	
-	memBlock.allocate(logicalDevice, allocSize, memReq.memoryTypeBits);
+	uint32_t memoryTypeIndex = findMemoryType(memReq.memoryTypeBits, memProperties);
+	
+	memBlock.allocate(logicalDevice, allocSize, memoryTypeIndex);
 
 	vkDestroyBuffer(logicalDevice, tempBuffer, nullptr);
 }
@@ -1546,7 +1742,9 @@ void allocateMemory(ImageMemoryBlock& memBlock, uint32_t allocSize)
 	VkMemoryRequirements memReq;
 	vkGetImageMemoryRequirements(logicalDevice, textureImage, &memReq);
 
-	memBlock.allocate(logicalDevice, allocSize, memReq.memoryTypeBits);
+	uint32_t memoryTypeIndex = findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+	memBlock.allocate(logicalDevice, allocSize, memoryTypeIndex);
 
 	vkDestroyImage(logicalDevice, textureImage, nullptr);
 }
@@ -1624,6 +1822,7 @@ void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayo
 	submitInfo.commandBufferCount = 1;
 	submitInfo.pCommandBuffers = &commandBuffer;
 
+	vkEndCommandBuffer(commandBuffer);
 	vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
 	vkQueueWaitIdle(graphicsQueue);
 	vkFreeCommandBuffers(logicalDevice, transientPool, 1, &commandBuffer);
@@ -1655,6 +1854,7 @@ void createBuffer(
 
 	VkMemoryRequirements memRequirements;
 	vkGetBufferMemoryRequirements(logicalDevice, buffer, &memRequirements);
+	//vkGetImageMemoryRequirements(logicalDevice, textureImage, &memRequirements);
 	uint32_t memType = findMemoryType(memRequirements.memoryTypeBits, properties);
 
 	if (usage & VK_BUFFER_USAGE_TRANSFER_SRC_BIT)
@@ -1809,6 +2009,7 @@ void copyBufferToImage(VkBuffer srcBuffer, VkImage dstImage, uint32_t width, uin
 	submitInfo.commandBufferCount = 1;
 	submitInfo.pCommandBuffers = &commandBuffer;
 
+	vkEndCommandBuffer(commandBuffer);
 	vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
 	vkQueueWaitIdle(graphicsQueue);
 	vkFreeCommandBuffers(logicalDevice, transientPool, 1, &commandBuffer);
@@ -1827,7 +2028,14 @@ void createCommandBuffers()
 	allocInfo.commandPool = commandPool;
 	allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
 	allocInfo.commandBufferCount = (uint32_t)commandBuffers.size();
-
+	//
+	//for (int i = 0; i < commandBuffers.size(); i++)
+	//{
+	//	if (vkAllocateCommandBuffers(logicalDevice, &allocInfo, &commandBuffers[i]) != VK_SUCCESS)
+	//	{
+	//		throw std::runtime_error("Failed to allocate command buffers!\n");
+	//	}
+	//}
 	if (vkAllocateCommandBuffers(logicalDevice, &allocInfo, commandBuffers.data()) != VK_SUCCESS)
 	{
 		throw std::runtime_error("Failed to allocate command buffers!\n");
@@ -1838,7 +2046,7 @@ void createCommandBuffers()
 
 
 
-void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex)
+void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t actualCurrentFrame, uint32_t imageIndex)
 {
 	const std::chrono::steady_clock::time_point prevTime = std::chrono::high_resolution_clock::now();
 
@@ -1860,7 +2068,8 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex)
 	renderPassInfo.renderArea.offset = { 0, 0 };
 	renderPassInfo.renderArea.extent = swapchainExtent;
 
-	VkClearValue clearColor = { {{0.0f, 0.0f, 0.0f, 1.0f}} };
+	VkClearValue clearColor{};
+	clearColor = { {{0.0f, 0.0f, 0.0f, 1.0f}} };
 	renderPassInfo.clearValueCount = 1;
 	renderPassInfo.pClearValues = &clearColor;
 
@@ -1891,10 +2100,11 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex)
 		pipelineLayout,
 		0,
 		1,
-		&descriptorSets[currentFrame],
+		&descriptorSets[actualCurrentFrame],
 		0,
 		nullptr
 	);
+	printf("Using descriptor set: %p for frame %d\n", descriptorSets[actualCurrentFrame], actualCurrentFrame);
 
 	for (int i = 0; i < vertexMemoryBlock.numBindingsBound; i++)
 	{
@@ -1929,11 +2139,11 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex)
 	{
 		throw std::runtime_error("Failed to record command buffer!\n");
 	}
-
+	//printf("RECORDED COMMAND BUFFER FOR FRAME : %d\n", currentFrame);
 	const std::chrono::steady_clock::time_point currentTime = std::chrono::high_resolution_clock::now();
 	const float deltaTime = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - prevTime).count();
-	if (deltaTime > 0.05f)
-		printf("Record command buffer time taken : %f\n", deltaTime);
+	//if (deltaTime > 0.05f)
+	//printf("Record command buffer time taken : %f\n", deltaTime);
 }
 
 
@@ -2069,7 +2279,7 @@ void createTextureSampler()
 void createSyncObjects()
 {
 	imageAvailableSemaphore.resize(MAX_FRAMES_IN_FLIGHT);
-	renderFinishedSemaphore.resize(MAX_FRAMES_IN_FLIGHT);
+	renderFinishedSemaphore.resize(swapchainImages.size());
 	inFlightFence.resize(MAX_FRAMES_IN_FLIGHT);
 
 	VkSemaphoreCreateInfo semaphoreInfo{};
@@ -2079,10 +2289,17 @@ void createSyncObjects()
 	fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 	fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
+	for (int i = 0; i < swapchainImages.size(); i++)
+	{
+		if (vkCreateSemaphore(logicalDevice, &semaphoreInfo, nullptr, &renderFinishedSemaphore[i]) != VK_SUCCESS)
+		{
+			throw std::runtime_error("Failed to create semaphore\n");
+		}
+	}
+
 	for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
 	{
-		if (vkCreateSemaphore(logicalDevice, &semaphoreInfo, nullptr, &imageAvailableSemaphore[i]) != VK_SUCCESS ||
-			vkCreateSemaphore(logicalDevice, &semaphoreInfo, nullptr, &renderFinishedSemaphore[i]) != VK_SUCCESS)
+		if (vkCreateSemaphore(logicalDevice, &semaphoreInfo, nullptr, &imageAvailableSemaphore[i]) != VK_SUCCESS)
 		{
 			throw std::runtime_error("Failed to create semaphore\n");
 		}
