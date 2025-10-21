@@ -238,7 +238,7 @@ std::vector<void*> uniformBuffersMapped;
 uint32_t currentFrame = 0;
 const int MAX_FRAMES_IN_FLIGHT = 2;
 const std::vector<const char*> validationLayers = {
-	"VK_LAYER_KHRONOS_validation"
+	"VK_LAYER_KHRONOS_validation",
 };
 const std::vector<const char*> deviceExtensions = {
 	VK_KHR_SWAPCHAIN_EXTENSION_NAME
@@ -323,6 +323,7 @@ void initVulkan()
 		if (isDeviceSuitable(device))
 		{
 			physicalDevice = device;
+			
 			printf("Found a suitable device!\n");
 			break;
 		}
@@ -337,25 +338,31 @@ void initVulkan()
 	createSwapChain();
 	createImageViews();
 	createRenderPass();
-	createDescriptorSetLayout();
-	createGraphicsPipeline();
 	createFrameBuffers();
+	createDescriptorSetLayout();
+	
+	
 	createCommandPool();
 	createCommandBuffers();
-	allocateMemory(vertexMemoryBlock, 4096, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+	
 	allocateMemory(uniformBuffersMemoryBlock, 1024, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
 	allocateMemory(imageTextureMemoryBlock, 16777216);
 	createTextureImage(textureImage);
 	createTextureImageView();
 	createTextureSampler();
-	createVertexBuffer(vertices, verticesIndices);
-	createVertexBuffer(vertices2, vertices2Indices);
-	createVertexBuffer(rectVertices, rectIndices);
 	createUniformBuffers();
 	createDescriptorPool();
 	createDescriptorSet();
 	createSyncObjects();
+
+	allocateMemory(vertexMemoryBlock, 4096, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 	
+	
+	createVertexBuffer(vertices, verticesIndices);
+	createVertexBuffer(vertices2, vertices2Indices);
+	createVertexBuffer(rectVertices, rectIndices);
+	
+	createGraphicsPipeline();
 }
 
 
@@ -505,7 +512,7 @@ static void framebufferResizeCallback(GLFWwindow* window, int width, int height)
 void drawFrameThread()
 {
 	float accTime = 0;
-	const float fps = 1.f / 100.f;
+	const float fps = 1.f / 240.f;
 	while (!glfwWindowShouldClose(window))
 	{
 		static std::chrono::steady_clock::time_point prevTime = std::chrono::high_resolution_clock::now();
@@ -595,7 +602,7 @@ void drawFrame()
 	submitInfo.pWaitSemaphores = waitSemaphores;
 	submitInfo.pWaitDstStageMask = waitStages;
 	submitInfo.commandBufferCount = 1;
-	submitInfo.pCommandBuffers = &commandBuffers[actualCurrentFrame];
+	submitInfo.pCommandBuffers = &commandBuffers[actualCurrentFrame];	
 
 	VkSemaphore signalSemaphores[] = { renderFinishedSemaphore[imageIndex] };
 	submitInfo.signalSemaphoreCount = 1;
@@ -605,7 +612,7 @@ void drawFrame()
 	{
 		throw std::runtime_error("Failed to submit draw command buffer\n");
 	}
-	printf("Current Frame : %d, Image Index : %d\n", actualCurrentFrame, imageIndex);
+
 	VkPresentInfoKHR presentInfo{};
 	presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
 	presentInfo.waitSemaphoreCount = 1;
@@ -698,10 +705,10 @@ void cleanup()
 	vkDestroyRenderPass(logicalDevice, renderPass, nullptr);
 	vkDestroyDevice(logicalDevice, nullptr);
 	vkDestroySurfaceKHR(instance, surface, nullptr);
-	vkDestroyInstance(instance, nullptr);
 	if (enableValidationLayers) {
 		DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
 	}
+	vkDestroyInstance(instance, nullptr);
 	glfwDestroyWindow(window);
 	glfwTerminate();
 }
@@ -987,7 +994,7 @@ void createSwapChain()
 
 	uint32_t imageCount = swapChainSupport.capabilities.minImageCount + 1;
 
-	if (swapChainSupport.capabilities.maxImageCount > 0 && imageCount > swapChainSupport.capabilities.minImageCount)
+	if (swapChainSupport.capabilities.maxImageCount > 0 && imageCount > swapChainSupport.capabilities.maxImageCount)
 	{
 		imageCount = swapChainSupport.capabilities.maxImageCount;
 		printf("Swapchain image count : %d\n", imageCount);
@@ -1204,7 +1211,7 @@ void createRenderPass()
 	colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
 	colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 	colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-	colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;	
 	colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 	colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
@@ -1356,7 +1363,7 @@ void createGraphicsPipeline()
 	rasterizer.rasterizerDiscardEnable = VK_FALSE;
 	rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
 	rasterizer.lineWidth = 1.0f;
-	rasterizer.cullMode = VK_CULL_MODE_NONE;
+	rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
 	rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
 	rasterizer.depthBiasEnable = VK_FALSE;
 	rasterizer.depthBiasConstantFactor = 0.0f;
@@ -1671,7 +1678,7 @@ void createDescriptorSet()
 		descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 		descriptorWrites[0].descriptorCount = 1;
 		descriptorWrites[0].pBufferInfo = &bufferInfo;
-
+				
 		descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 		descriptorWrites[1].dstSet = descriptorSets[i];
 		descriptorWrites[1].dstBinding = 1;
@@ -2028,7 +2035,7 @@ void createCommandBuffers()
 	allocInfo.commandPool = commandPool;
 	allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
 	allocInfo.commandBufferCount = (uint32_t)commandBuffers.size();
-	//
+	//	
 	//for (int i = 0; i < commandBuffers.size(); i++)
 	//{
 	//	if (vkAllocateCommandBuffers(logicalDevice, &allocInfo, &commandBuffers[i]) != VK_SUCCESS)
@@ -2084,7 +2091,7 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t actualCurrentFr
 	viewport.minDepth = 0.0f;
 	viewport.maxDepth = 1.0f;
 	vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
-
+	//printf("Viewport dimansions : %d, %d\n", viewport.width, viewport.height);
 	VkRect2D scissor{};
 	scissor.offset = { 0, 0 };
 	scissor.extent = swapchainExtent;
@@ -2104,7 +2111,7 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t actualCurrentFr
 		0,
 		nullptr
 	);
-	printf("Using descriptor set: %p for frame %d\n", descriptorSets[actualCurrentFrame], actualCurrentFrame);
+	//printf("Using descriptor set: %p for frame %d\n", descriptorSets[actualCurrentFrame], actualCurrentFrame);
 
 	for (int i = 0; i < vertexMemoryBlock.numBindingsBound; i++)
 	{
@@ -2152,9 +2159,11 @@ void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t actualCurrentFr
 
 void createTextureImage(VkImage& handle)
 {
-	int texWidth, texHeight, texChannels;
-	stbi_uc* pixels = stbi_load("Textures/noita.png", &texWidth,
-		&texHeight, &texChannels, STBI_rgb_alpha);
+	//int texWidth, texHeight, texChannels;
+	//stbi_uc* pixels = stbi_load("Textures/noita.png", &texWidth,
+	//	&texHeight, &texChannels, STBI_rgb_alpha);
+	uint16_t texWidth, texHeight;
+	unsigned char* pixels = loadTGA("Textures/monsoon_icon.tga", &texWidth, &texHeight);
 	VkDeviceSize imageSize = texWidth * texHeight * 4;
 
 	if (!pixels)
@@ -2287,7 +2296,7 @@ void createSyncObjects()
 
 	VkFenceCreateInfo fenceInfo{};
 	fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-	fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+	fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT; 
 
 	for (int i = 0; i < swapchainImages.size(); i++)
 	{

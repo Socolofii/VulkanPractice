@@ -156,6 +156,7 @@ void ImageMemoryBlock::bindImage(VkDevice logicalDevice, VkImage& image, uint32_
 
 	printf("Bound image! alignment : %d,   size : %d,   offset : %d\n", alignment, alignedSize, totalOffset);
 	vkBindImageMemory(logicalDevice, image, memory, totalOffset);
+	
 
 	bindings[targetIndex] =
 	{
